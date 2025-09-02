@@ -1,0 +1,375 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Mini e-commerce - EventBridge + SQS per Lambda + DynamoDB + SNS (SAM)
+Globals:
+  Function:
+    Runtime: nodejs18.x
+    Timeout: 15
+    MemorySize: 256
+    Tracing: Active
+Resources:
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: ${AWS::StackName}-Orders
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: orderId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: orderId
+        KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+  PaymentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: ${AWS::StackName}-Payments
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: paymentId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: paymentId
+        KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+  OrderNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName:
+        Fn::Sub: ${AWS::StackName}-order-notifications
+  EcomBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-bus
+  EventBridgeLoggerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${AWS::StackName}-EventBridgeLogger
+      RetentionInDays: 7
+  EventBridgeLoggerFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-EventBridgeLogger
+      Handler: src/eventBridgeLogger.handler
+      CodeUri: EventBridgeLoggerFn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          LOG_PREFIX:
+            Fn::Sub: ${AWS::StackName}-EventBridge
+      Policies:
+      - AWSLambdaBasicExecutionRole
+    Metadata:
+      SamResourceId: EventBridgeLoggerFn
+  EventBridgeLoggerFnPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: EventBridgeLoggerFn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - EcomBus
+        - Arn
+  EventBridgeLoggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-AllEventsToLogger
+      EventBusName:
+        Ref: EcomBus
+      EventPattern:
+        account:
+        - Ref: AWS::AccountId
+      Targets:
+      - Id: EventBridgeLoggerTarget
+        Arn:
+          Fn::GetAtt:
+          - EventBridgeLoggerFn
+          - Arn
+  PaymentDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: ${AWS::StackName}-Payment-DLQ
+  PaymentQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: ${AWS::StackName}-Payment-Queue
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+          - PaymentDLQ
+          - Arn
+        maxReceiveCount: 5
+  NotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: ${AWS::StackName}-Notification-DLQ
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: ${AWS::StackName}-Notification-Queue
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+          - NotificationDLQ
+          - Arn
+        maxReceiveCount: 5
+  PaymentQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+      - Ref: PaymentQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowEventBridgeSendMessage
+          Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sqs:SendMessage
+          Resource:
+            Fn::GetAtt:
+            - PaymentQueue
+            - Arn
+  NotificationQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+      - Ref: NotificationQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowEventBridgeSendMessage
+          Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sqs:SendMessage
+          Resource:
+            Fn::GetAtt:
+            - NotificationQueue
+            - Arn
+          Condition:
+            ArnEquals:
+              aws:SourceArn:
+                Fn::GetAtt:
+                - EcomBus
+                - Arn
+  OrderCreatedToPaymentRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-OrderCreated-to-Payment
+      EventBusName:
+        Ref: EcomBus
+      EventPattern:
+        source:
+        - app.orders
+        detail-type:
+        - OrderCreated
+      Targets:
+      - Id: PaymentQueueTarget
+        Arn:
+          Fn::GetAtt:
+          - PaymentQueue
+          - Arn
+  PaymentProcessedToNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-PaymentProcessed-to-Notification
+      EventBusName:
+        Ref: EcomBus
+      EventPattern:
+        source:
+        - app.payments
+        detail-type:
+        - PaymentProcessed
+      Targets:
+      - Id: NotificationQueueTarget
+        Arn:
+          Fn::GetAtt:
+          - NotificationQueue
+          - Arn
+  ApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+        - '*'
+        AllowMethods:
+        - '*'
+        AllowHeaders:
+        - '*'
+  ApiCreateOrderFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-apiCreateOrder
+      Handler: src/apiCreateOrder.handler
+      CodeUri: ApiCreateOrderFn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          ORDERS_TABLE:
+            Ref: OrdersTable
+          EVENT_BUS_NAME:
+            Ref: EcomBus
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: OrdersTable
+      - Statement:
+        - Effect: Allow
+          Action:
+          - events:PutEvents
+          Resource:
+            Fn::GetAtt:
+            - EcomBus
+            - Arn
+      - AWSLambdaBasicExecutionRole
+      Events:
+        CreateOrder:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: ApiGateway
+            Path: /orders
+            Method: POST
+    Metadata:
+      SamResourceId: ApiCreateOrderFn
+  SvcProcessPaymentFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-svcProcessPayment
+      Handler: src/svcProcessPayment.handler
+      CodeUri: SvcProcessPaymentFn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          PAYMENTS_TABLE:
+            Ref: PaymentsTable
+          EVENT_BUS_NAME:
+            Ref: EcomBus
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - Statement:
+        - Effect: Allow
+          Action:
+          - events:PutEvents
+          Resource:
+            Fn::GetAtt:
+            - EcomBus
+            - Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:Query
+          - dynamodb:Scan
+          Resource:
+            Fn::GetAtt:
+            - PaymentsTable
+            - Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - sqs:ReceiveMessage
+          - sqs:DeleteMessage
+          - sqs:GetQueueAttributes
+          Resource:
+            Fn::GetAtt:
+            - PaymentQueue
+            - Arn
+      Events:
+        PaymentQueueEvent:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - PaymentQueue
+              - Arn
+            BatchSize: 5
+    Metadata:
+      SamResourceId: SvcProcessPaymentFn
+  SvcSendNotificationFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-svcSendNotification
+      Handler: src/svcSendNotification.handler
+      CodeUri: SvcSendNotificationFn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          ORDERS_TABLE:
+            Ref: OrdersTable
+          NOTIF_TOPIC_ARN:
+            Ref: OrderNotificationsTopic
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: OrdersTable
+      - Statement:
+        - Effect: Allow
+          Action:
+          - sns:Publish
+          Resource:
+            Ref: OrderNotificationsTopic
+      - AWSLambdaBasicExecutionRole
+      Events:
+        NotificationQueueEvent:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - NotificationQueue
+              - Arn
+            BatchSize: 5
+    Metadata:
+      SamResourceId: SvcSendNotificationFn
+  ApiGatewayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: ApiCreateOrderFn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+Outputs:
+  ApiBaseUrl:
+    Description: HTTP API base URL
+    Value:
+      Fn::Sub: https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com
+  OrdersTableName:
+    Value:
+      Ref: OrdersTable
+  PaymentsTableName:
+    Value:
+      Ref: PaymentsTable
+  PaymentQueueUrl:
+    Value:
+      Ref: PaymentQueue
+  NotificationQueueUrl:
+    Value:
+      Ref: NotificationQueue
+  EventBusName:
+    Value:
+      Ref: EcomBus
+  NotificationsTopicArn:
+    Value:
+      Ref: OrderNotificationsTopic
