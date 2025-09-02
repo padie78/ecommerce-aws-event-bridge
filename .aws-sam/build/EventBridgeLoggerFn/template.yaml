@@ -152,9 +152,6 @@ Resources:
               Service: events.amazonaws.com
             Action: "sqs:SendMessage"
             Resource: !GetAtt NotificationQueue.Arn
-            Condition:
-              ArnEquals:
-                aws:SourceArn: !GetAtt EcomBus.Arn
 
   ### EventBridge rules
   OrderCreatedToPaymentRule:

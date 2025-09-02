@@ -161,12 +161,6 @@ Resources:
             Fn::GetAtt:
             - NotificationQueue
             - Arn
-          Condition:
-            ArnEquals:
-              aws:SourceArn:
-                Fn::GetAtt:
-                - EcomBus
-                - Arn
   OrderCreatedToPaymentRule:
     Type: AWS::Events::Rule
     Properties:
