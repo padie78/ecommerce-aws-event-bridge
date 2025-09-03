@@ -4,6 +4,8 @@ const { EventBridgeClient, PutEventsCommand } = require("@aws-sdk/client-eventbr
 // Crear cliente EventBridge
 const ebClient = new EventBridgeClient({});
 
+const localTimeIsrael = () => new Date().toLocaleString('en-IL', { timeZone: 'Asia/Jerusalem' });
+
 // Generar un ID único
 function newId(prefix = "") {
   return prefix + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -30,4 +32,4 @@ async function putEvent(detailType, source, detail, eventBusName) {
   return await ebClient.send(command);
 }
 
-module.exports = { newId, nowIso, putEvent };
+module.exports = { newId, nowIso, putEvent, localTimeIsrael };

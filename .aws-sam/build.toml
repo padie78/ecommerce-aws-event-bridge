@@ -7,6 +7,6 @@ architecture = "x86_64"
 handler = "src/apiCreateOrder.handler"
 manifest_hash = "1795f2826b1b19afdbbf840fc791a3d3"
 packagetype = "Zip"
-functions = ["EventBridgeLoggerFn", "ApiCreateOrderFn", "SvcProcessPaymentFn", "SvcSendNotificationFn"]
+functions = ["EventBridgeLoggerFn", "ApiCreateOrderFn", "ApiGetOrdersFn", "SvcProcessPaymentFn", "SvcSendNotificationFn"]
 
 [layer_build_definitions]

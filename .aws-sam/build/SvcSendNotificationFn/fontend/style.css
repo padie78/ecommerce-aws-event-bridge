@@ -1,23 +1,42 @@
+/* Aplica border-box a todos los elementos para que el padding y border
+   se incluyan en el ancho y alto total. */
+* {
+  box-sizing: border-box;
+}
+
 body {
   font-family: Arial, sans-serif;
   background: #f5f7fa;
   margin: 0;
   padding: 2rem;
   color: #333;
+  /* Centra el contenido en el centro de la página */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
 }
 
 h1 {
   text-align: center;
   color: #2c3e50;
+  margin-bottom: 1rem;
 }
 
 form {
   max-width: 400px;
-  margin: 2rem auto;
+  width: 100%; /* Asegura que el formulario se adapte en pantallas pequeñas */
+  margin: 0 auto;
   padding: 1.5rem;
   background: #fff;
   border-radius: 10px;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  transition: transform 0.3s ease;
+}
+
+form:hover {
+  transform: translateY(-5px);
 }
 
 label {
@@ -33,6 +52,12 @@ input {
   border: 1px solid #ccc;
   border-radius: 6px;
   font-size: 1rem;
+  transition: border-color 0.3s ease;
+}
+
+input:focus {
+  border-color: #3498db;
+  outline: none;
 }
 
 button {
@@ -44,15 +69,17 @@ button {
   border-radius: 6px;
   font-size: 1rem;
   cursor: pointer;
-  transition: background 0.3s ease;
+  transition: background 0.3s ease, transform 0.2s ease;
 }
 
 button:hover {
   background: #2980b9;
+  transform: translateY(-2px);
 }
 
 #result {
   max-width: 600px;
+  width: 100%; /* Asegura que el div de resultados también se adapte */
   margin: 2rem auto;
   padding: 1rem;
   background: #ecf0f1;

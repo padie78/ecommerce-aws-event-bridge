@@ -244,6 +244,38 @@ Resources:
             Method: POST
     Metadata:
       SamResourceId: ApiCreateOrderFn
+  ApiGetOrdersFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-apiGetOrders
+      Handler: src/apiGetOrders.handler
+      CodeUri: ApiGetOrdersFn
+      Runtime: nodejs18.x
+      Environment:
+        Variables:
+          ORDERS_TABLE:
+            Ref: OrdersTable
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - dynamodb:Scan
+          Resource:
+            Fn::GetAtt:
+            - OrdersTable
+            - Arn
+      - AWSLambdaBasicExecutionRole
+      Events:
+        GetOrders:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: ApiGateway
+            Path: /orders
+            Method: GET
+    Metadata:
+      SamResourceId: ApiGetOrdersFn
   SvcProcessPaymentFn:
     Type: AWS::Serverless::Function
     Properties:
@@ -355,6 +387,13 @@ Resources:
     Properties:
       FunctionName:
         Ref: ApiCreateOrderFn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+  ApiGetOrdersInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: ApiGetOrdersFn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
   FrontendBucket:
