@@ -137,7 +137,6 @@ Resources:
             Action: "sqs:SendMessage"
             Resource: !GetAtt PaymentQueue.Arn
 
-
   NotificationQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -166,7 +165,6 @@ Resources:
         - Id: "PaymentQueueTarget"
           Arn: !GetAtt PaymentQueue.Arn
           
-
   PaymentProcessedToNotificationRule:
     Type: AWS::Events::Rule
     Properties:
@@ -230,7 +228,13 @@ Resources:
           PAYMENTS_TABLE: !Ref PaymentsTable
           EVENT_BUS_NAME: !Ref EcomBus
       Policies:
-        - AWSLambdaBasicExecutionRole
+        - Statement: # Se ha cambiado el DynamoDBCrudPolicy por un Statement más específico.
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt PaymentsTable.Arn
         - Statement:
             - Effect: Allow
               Action:
@@ -239,19 +243,11 @@ Resources:
         - Statement:
             - Effect: Allow
               Action:
-                - dynamodb:GetItem
-                - dynamodb:PutItem
-                - dynamodb:UpdateItem
-                - dynamodb:Query
-                - dynamodb:Scan
-              Resource: !GetAtt PaymentsTable.Arn
-        - Statement:
-            - Effect: Allow
-              Action:
                 - sqs:ReceiveMessage
                 - sqs:DeleteMessage
                 - sqs:GetQueueAttributes
               Resource: !GetAtt PaymentQueue.Arn
+        - AWSLambdaBasicExecutionRole
       Events:
         PaymentQueueEvent:
           Type: SQS
@@ -272,13 +268,23 @@ Resources:
           ORDERS_TABLE: !Ref OrdersTable
           NOTIF_TOPIC_ARN: !Ref OrderNotificationsTopic
       Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref OrdersTable
+        - Statement: # Se ha cambiado el DynamoDBCrudPolicy por un Statement más específico.
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt OrdersTable.Arn
         - Statement:
             - Effect: Allow
               Action:
                 - sns:Publish
               Resource: !Ref OrderNotificationsTopic
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt NotificationQueue.Arn
         - AWSLambdaBasicExecutionRole
       Events:
         NotificationQueueEvent:
@@ -294,6 +300,65 @@ Resources:
       FunctionName: !Ref ApiCreateOrderFn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
+
+  ### --- FRONTEND (S3 + CloudFront) ---
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "mini-ecommerce-frontend-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true # Corregido: Es importante que esta política sea 'true' para que el bucket sea privado.
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true # Corregido: Restringe el acceso público.
+
+  FrontendOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "Access Identity for ${AWS::StackName} Frontend"
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontAccess
+            Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt FrontendOriginAccessIdentity.S3CanonicalUserId # Corregido: Se debe usar el ID de usuario canónico del OAI.
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: FrontendOrigin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${FrontendOriginAccessIdentity}"
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: ["GET", "HEAD"]
+          CachedMethods: ["GET", "HEAD"]
+          ForwardedValues:
+            QueryString: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        HttpVersion: http2
 
 Outputs:
   ApiBaseUrl:
@@ -311,3 +376,9 @@ Outputs:
     Value: !Ref EcomBus
   NotificationsTopicArn:
     Value: !Ref OrderNotificationsTopic
+  FrontendBucketName:
+    Description: "S3 bucket for frontend hosting"
+    Value: !Ref FrontendBucket
+  FrontendURL:
+    Description: "CloudFront URL for accessing the frontend"
+    Value: !GetAtt FrontendDistribution.DomainName

@@ -259,7 +259,16 @@ Resources:
           EVENT_BUS_NAME:
             Ref: EcomBus
       Policies:
-      - AWSLambdaBasicExecutionRole
+      - Statement:
+        - Effect: Allow
+          Action:
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          Resource:
+            Fn::GetAtt:
+            - PaymentsTable
+            - Arn
       - Statement:
         - Effect: Allow
           Action:
@@ -271,18 +280,6 @@ Resources:
       - Statement:
         - Effect: Allow
           Action:
-          - dynamodb:GetItem
-          - dynamodb:PutItem
-          - dynamodb:UpdateItem
-          - dynamodb:Query
-          - dynamodb:Scan
-          Resource:
-            Fn::GetAtt:
-            - PaymentsTable
-            - Arn
-      - Statement:
-        - Effect: Allow
-          Action:
           - sqs:ReceiveMessage
           - sqs:DeleteMessage
           - sqs:GetQueueAttributes
@@ -290,6 +287,7 @@ Resources:
             Fn::GetAtt:
             - PaymentQueue
             - Arn
+      - AWSLambdaBasicExecutionRole
       Events:
         PaymentQueueEvent:
           Type: SQS
@@ -316,15 +314,30 @@ Resources:
           NOTIF_TOPIC_ARN:
             Ref: OrderNotificationsTopic
       Policies:
-      - DynamoDBCrudPolicy:
-          TableName:
-            Ref: OrdersTable
+      - Statement:
+        - Effect: Allow
+          Action:
+          - dynamodb:GetItem
+          Resource:
+            Fn::GetAtt:
+            - OrdersTable
+            - Arn
       - Statement:
         - Effect: Allow
           Action:
           - sns:Publish
           Resource:
             Ref: OrderNotificationsTopic
+      - Statement:
+        - Effect: Allow
+          Action:
+          - sqs:ReceiveMessage
+          - sqs:DeleteMessage
+          - sqs:GetQueueAttributes
+          Resource:
+            Fn::GetAtt:
+            - NotificationQueue
+            - Arn
       - AWSLambdaBasicExecutionRole
       Events:
         NotificationQueueEvent:
@@ -344,6 +357,75 @@ Resources:
         Ref: ApiCreateOrderFn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: mini-ecommerce-frontend-${AWS::AccountId}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      OwnershipControls:
+        Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  FrontendOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment:
+          Fn::Sub: Access Identity for ${AWS::StackName} Frontend
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowCloudFrontAccess
+          Effect: Allow
+          Principal:
+            CanonicalUser:
+              Fn::GetAtt:
+              - FrontendOriginAccessIdentity
+              - S3CanonicalUserId
+          Action: s3:GetObject
+          Resource:
+            Fn::Sub: ${FrontendBucket.Arn}/*
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+        - Id: FrontendOrigin
+          DomainName:
+            Fn::GetAtt:
+            - FrontendBucket
+            - RegionalDomainName
+          S3OriginConfig:
+            OriginAccessIdentity:
+              Fn::Sub: origin-access-identity/cloudfront/${FrontendOriginAccessIdentity}
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+          - GET
+          - HEAD
+          CachedMethods:
+          - GET
+          - HEAD
+          ForwardedValues:
+            QueryString: false
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        HttpVersion: http2
 Outputs:
   ApiBaseUrl:
     Description: HTTP API base URL
@@ -367,3 +449,13 @@ Outputs:
   NotificationsTopicArn:
     Value:
       Ref: OrderNotificationsTopic
+  FrontendBucketName:
+    Description: S3 bucket for frontend hosting
+    Value:
+      Ref: FrontendBucket
+  FrontendURL:
+    Description: CloudFront URL for accessing the frontend
+    Value:
+      Fn::GetAtt:
+      - FrontendDistribution
+      - DomainName
